@@ -973,12 +973,20 @@ function markRootSuspended(root, suspendedLanes) {
 
 // This is the entry point for synchronous tasks that don't go
 // through Scheduler
+// 【面试必考】performSyncWorkOnRoot - 同步渲染的入口函数
+// 这是 React 同步更新的起点，包含 render 和 commit 两大阶段
+//
+// 面试常问：React 的更新流程是什么？
+// 答：分为两大阶段：
+//     1. render 阶段：构建 Fiber 树，标记副作用，可以中断
+//     2. commit 阶段：执行副作用，操作 DOM，不可中断
 function performSyncWorkOnRoot(root) {
   invariant(
     (executionContext & (RenderContext | CommitContext)) === NoContext,
     'Should not already be working.',
   );
 
+  // 【面试考点】先执行所有待处理的 useEffect
   flushPassiveEffects();
 
   let lanes;
@@ -990,6 +998,7 @@ function performSyncWorkOnRoot(root) {
     // There's a partial tree, and at least one of its lanes has expired. Finish
     // rendering it before rendering the rest of the expired work.
     lanes = workInProgressRootRenderLanes;
+    // 【面试必考】开始 render 阶段
     exitStatus = renderRootSync(root, lanes);
     if (
       includesSomeLane(
@@ -1498,14 +1507,24 @@ export function renderHasNotSuspendedYet(): boolean {
   return workInProgressRootExitStatus === RootIncomplete;
 }
 
+// 【面试必考】renderRootSync - render 阶段的同步执行
+// 这个函数负责构建 workInProgress Fiber 树
+//
+// 面试常问：render 阶段做什么？
+// 答：1. 遍历 Fiber 树（深度优先遍历）
+//     2. 调用 beginWork 和 completeWork
+//     3. 执行 Diff 算法，标记副作用（flags）
+//     4. 这个阶段是可以中断的（并发模式下）
 function renderRootSync(root: FiberRoot, lanes: Lanes) {
   const prevExecutionContext = executionContext;
-  executionContext |= RenderContext;
+  executionContext |= RenderContext;  // 标记进入 render 阶段
   const prevDispatcher = pushDispatcher();
 
   // If the root or lanes have changed, throw out the existing stack
   // and prepare a fresh one. Otherwise we'll continue where we left off.
   if (workInProgressRoot !== root || workInProgressRootRenderLanes !== lanes) {
+    // 【面试重点】准备新的 Fiber 树
+    // 从 current 树克隆创建 workInProgress 树
     prepareFreshStack(root, lanes);
     startWorkOnPendingInteractions(root, lanes);
   }
@@ -1522,11 +1541,13 @@ function renderRootSync(root: FiberRoot, lanes: Lanes) {
     markRenderStarted(lanes);
   }
 
+  // 【面试必考】执行工作循环，构建 Fiber 树
   do {
     try {
       workLoopSync();
       break;
     } catch (thrownValue) {
+      // 捕获渲染过程中的错误
       handleError(root, thrownValue);
     }
   } while (true);
@@ -1566,9 +1587,17 @@ function renderRootSync(root: FiberRoot, lanes: Lanes) {
 
 // The work loop is an extremely hot path. Tell Closure not to inline it.
 /** @noinline */
+// 【面试必考】workLoopSync - 同步工作循环
+// 遍历 Fiber 树的核心循环
+//
+// 面试常问：Fiber 树如何遍历？
+// 答：深度优先遍历，先处理子节点（递），再处理兄弟节点（归）
+//     每个节点都会执行 performUnitOfWork
 function workLoopSync() {
-  // Already timed out, so perform work without checking if we need to yield.
+  // 【面试重点】同步模式：不检查是否需要让出执行权
+  // 一直执行到 workInProgress 为 null（整棵树遍历完成）
   while (workInProgress !== null) {
+    // 【面试必考】处理一个工作单元（一个 Fiber 节点）
     performUnitOfWork(workInProgress);
   }
 }
@@ -1772,8 +1801,16 @@ function completeUnitOfWork(unitOfWork: Fiber): void {
   }
 }
 
+// 【面试必考】commitRoot - commit 阶段的入口
+// render 阶段完成后，进入 commit 阶段
+//
+// 面试常问：commit 阶段做什么？
+// 答：1. 执行副作用（DOM 操作、生命周期、Hooks 等）
+//     2. 分为三个子阶段：before mutation、mutation、layout
+//     3. 这个阶段不可中断，必须同步执行完成
 function commitRoot(root) {
   const renderPriorityLevel = getCurrentPriorityLevel();
+  // 【面试重点】以最高优先级执行 commit
   runWithPriority(
     ImmediateSchedulerPriority,
     commitRootImpl.bind(null, root, renderPriorityLevel),
@@ -1893,13 +1930,19 @@ function commitRootImpl(root, renderPriorityLevel) {
     // Reset this to null before calling lifecycles
     ReactCurrentOwner.current = null;
 
+    // 【面试必考】commit 阶段的三个子阶段
     // The commit phase is broken into several sub-phases. We do a separate pass
     // of the effect list for each phase: all mutation effects come before all
     // layout effects, and so on.
 
+    // 【面试必考】第一阶段：before mutation（DOM 变更前）
     // The first phase a "before mutation" phase. We use this phase to read the
     // state of the host tree right before we mutate it. This is where
     // getSnapshotBeforeUpdate is called.
+    //
+    // 面试常问：这个阶段做什么？
+    // 答：1. 调用 getSnapshotBeforeUpdate（类组件）
+    //     2. 调度 useEffect（异步调度，不在这里执行）
     focusedInstanceHandle = prepareForCommit(root.containerInfo);
     shouldFireAfterActiveInstanceBlur = false;
 
@@ -1914,7 +1957,13 @@ function commitRootImpl(root, renderPriorityLevel) {
       recordCommitTime();
     }
 
+    // 【面试必考】第二阶段：mutation（DOM 变更）
     // The next phase is the mutation phase, where we mutate the host tree.
+    //
+    // 面试常问：这个阶段做什么？
+    // 答：1. 执行 DOM 操作（插入、更新、删除）
+    //     2. 执行 useLayoutEffect 的清理函数
+    //     3. 执行 componentWillUnmount（类组件）
     commitMutationEffects(finishedWork, root, renderPriorityLevel);
 
     if (shouldFireAfterActiveInstanceBlur) {
@@ -1922,15 +1971,23 @@ function commitRootImpl(root, renderPriorityLevel) {
     }
     resetAfterCommit(root.containerInfo);
 
+    // 【面试重点】切换 current 指针
+    // mutation 完成后，workInProgress 树变成 current 树
     // The work-in-progress tree is now the current tree. This must come after
     // the mutation phase, so that the previous tree is still current during
     // componentWillUnmount, but before the layout phase, so that the finished
     // work is current during componentDidMount/Update.
     root.current = finishedWork;
 
+    // 【面试必考】第三阶段：layout（DOM 变更后）
     // The next phase is the layout phase, where we call effects that read
     // the host tree after it's been mutated. The idiomatic use case for this is
     // layout, but class component lifecycles also fire here for legacy reasons.
+    //
+    // 面试常问：这个阶段做什么？
+    // 答：1. 执行 useLayoutEffect 的回调函数（同步执行）
+    //     2. 执行 componentDidMount/componentDidUpdate（类组件）
+    //     3. 更新 ref
 
     if (__DEV__) {
       if (enableDebugTracing) {

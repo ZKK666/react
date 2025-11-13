@@ -267,21 +267,31 @@ function resolveLazyType<T, P>(
   }
 }
 
+// 【面试重点】ChildReconciler - Diff 算法的工厂函数
+// shouldTrackSideEffects：是否追踪副作用（首次渲染为 false，更新渲染为 true）
 // This wrapper function exists because I expect to clone the code in each path
 // to be able to optimize each path individually by branching early. This needs
 // a compiler or we can do it manually. Helpers that don't need this branching
 // live outside of this function.
 function ChildReconciler(shouldTrackSideEffects) {
+  // 【面试高频】deleteChild - 标记删除子节点
+  // 将要删除的子节点添加到父节点的 deletions 数组中
+  //
+  // 面试常问：React 如何删除节点？
+  // 答：并不是立即删除，而是标记为 Deletion，在 commit 阶段统一处理
   function deleteChild(returnFiber: Fiber, childToDelete: Fiber): void {
     if (!shouldTrackSideEffects) {
-      // Noop.
+      // 【面试考点】首次渲染不追踪副作用，直接返回
+      // 因为首次渲染没有旧节点需要删除
       return;
     }
     const deletions = returnFiber.deletions;
     if (deletions === null) {
+      // 第一个要删除的子节点
       returnFiber.deletions = [childToDelete];
-      returnFiber.flags |= Deletion;
+      returnFiber.flags |= Deletion;  // 标记父节点有删除操作
     } else {
+      // 追加到删除列表
       deletions.push(childToDelete);
     }
   }
@@ -305,6 +315,12 @@ function ChildReconciler(shouldTrackSideEffects) {
     return null;
   }
 
+  // 【面试必考】mapRemainingChildren - 将剩余的旧子节点转换为 Map
+  // 这是多节点 Diff 第二轮遍历的优化：使用 Map 快速查找节点
+  //
+  // 面试常问：React Diff 为什么需要 key？
+  // 答：在多节点 Diff 中，key 用于快速判断节点是否可以复用
+  // 没有 key 时使用 index，但无法正确识别节点移动
   function mapRemainingChildren(
     returnFiber: Fiber,
     currentFirstChild: Fiber,
@@ -312,13 +328,18 @@ function ChildReconciler(shouldTrackSideEffects) {
     // Add the remaining children to a temporary map so that we can find them by
     // keys quickly. Implicit (null) keys get added to this set with their index
     // instead.
+
+    // 【面试高频】创建 Map 用于 O(1) 时间复杂度查找
     const existingChildren: Map<string | number, Fiber> = new Map();
 
     let existingChild = currentFirstChild;
     while (existingChild !== null) {
       if (existingChild.key !== null) {
+        // 【面试重点】有 key 的节点，用 key 作为 Map 的键
         existingChildren.set(existingChild.key, existingChild);
       } else {
+        // 【面试考点】没有 key 的节点，用 index 作为 Map 的键
+        // 这就是为什么没有 key 时可能出现错误复用
         existingChildren.set(existingChild.index, existingChild);
       }
       existingChild = existingChild.sibling;
@@ -335,6 +356,12 @@ function ChildReconciler(shouldTrackSideEffects) {
     return clone;
   }
 
+  // 【面试必考】placeChild - 标记节点插入或移动
+  // 这是 Diff 算法判断节点是否需要移动的核心逻辑
+  //
+  // 面试常问：React 如何判断节点需要移动？
+  // 答：通过 lastPlacedIndex（最后一个可复用节点在旧列表中的位置）
+  // 如果当前节点的 oldIndex < lastPlacedIndex，说明节点需要向右移动
   function placeChild(
     newFiber: Fiber,
     lastPlacedIndex: number,
@@ -342,30 +369,40 @@ function ChildReconciler(shouldTrackSideEffects) {
   ): number {
     newFiber.index = newIndex;
     if (!shouldTrackSideEffects) {
-      // Noop.
+      // 首次渲染不需要标记
       return lastPlacedIndex;
     }
     const current = newFiber.alternate;
     if (current !== null) {
+      // 【面试必考】节点可以复用（有对应的旧节点）
       const oldIndex = current.index;
       if (oldIndex < lastPlacedIndex) {
-        // This is a move.
+        // 【面试高频】oldIndex < lastPlacedIndex：节点需要向右移动
+        // 例如：旧列表 [A, B, C]，新列表 [C, A, B]
+        // 当处理 A 时，lastPlacedIndex 是 C 的 oldIndex(2)，A 的 oldIndex(0) < 2
+        // 所以 A 需要移动
         newFiber.flags = Placement;
         return lastPlacedIndex;
       } else {
-        // This item can stay in place.
+        // 【面试重点】oldIndex >= lastPlacedIndex：节点不需要移动
+        // 更新 lastPlacedIndex 为当前节点的 oldIndex
         return oldIndex;
       }
     } else {
-      // This is an insertion.
+      // 【面试考点】新增节点（没有对应的旧节点）
       newFiber.flags = Placement;
       return lastPlacedIndex;
     }
   }
 
+  // 【面试考点】placeSingleChild - 处理单节点的插入
+  // 单节点 Diff 比多节点简单，只需要判断是否是新增节点
   function placeSingleChild(newFiber: Fiber): Fiber {
     // This is simpler for the single child case. We only need to do a
     // placement for inserting new children.
+
+    // 【面试重点】只有新增节点（没有 alternate）才需要标记 Placement
+    // 可复用的节点不需要移动（单节点没有移动的概念）
     if (shouldTrackSideEffects && newFiber.alternate === null) {
       newFiber.flags = Placement;
     }
@@ -761,6 +798,17 @@ function ChildReconciler(shouldTrackSideEffects) {
     return knownKeys;
   }
 
+  // 【面试必考】reconcileChildrenArray - 多节点 Diff 算法
+  // 处理新子节点是数组的情况（多个子节点）
+  //
+  // 面试高频问题：React 多节点 Diff 的策略是什么？
+  // 答：采用两轮遍历
+  //     第一轮：处理更新节点（key 和 type 都相同）
+  //     第二轮：处理剩余节点（新增、删除、移动）
+  //
+  // 面试常问：为什么要两轮遍历？
+  // 答：因为大多数情况下，节点只是属性更新，位置不变
+  //     第一轮遍历可以快速处理这种情况，性能最优
   function reconcileChildrenArray(
     returnFiber: Fiber,
     currentFirstChild: Fiber | null,
@@ -795,13 +843,17 @@ function ChildReconciler(shouldTrackSideEffects) {
       }
     }
 
+    // 【面试重点】返回值：新 Fiber 链表的头节点
     let resultingFirstChild: Fiber | null = null;
     let previousNewFiber: Fiber | null = null;
 
     let oldFiber = currentFirstChild;
-    let lastPlacedIndex = 0;
+    let lastPlacedIndex = 0;  // 【面试必考】最后一个可复用节点在旧列表中的位置
     let newIdx = 0;
     let nextOldFiber = null;
+
+    // 【面试必考】第一轮遍历：处理更新的节点
+    // 遍历新旧子节点列表，更新相同位置上 key 相同的节点
     for (; oldFiber !== null && newIdx < newChildren.length; newIdx++) {
       if (oldFiber.index > newIdx) {
         nextOldFiber = oldFiber;
@@ -816,10 +868,8 @@ function ChildReconciler(shouldTrackSideEffects) {
         lanes,
       );
       if (newFiber === null) {
-        // TODO: This breaks on empty slots like null children. That's
-        // unfortunate because it triggers the slow path all the time. We need
-        // a better way to communicate whether this was a miss or null,
-        // boolean, undefined, etc.
+        // 【面试考点】key 不同，无法复用，跳出第一轮遍历
+        // 进入第二轮遍历处理剩余节点
         if (oldFiber === null) {
           oldFiber = nextOldFiber;
         }
@@ -847,15 +897,18 @@ function ChildReconciler(shouldTrackSideEffects) {
       oldFiber = nextOldFiber;
     }
 
+    // 【面试高频】第一轮遍历结束后的情况判断
+
     if (newIdx === newChildren.length) {
-      // We've reached the end of the new children. We can delete the rest.
+      // 【面试考点】情况1：新节点遍历完，删除剩余的旧节点
+      // 例如：旧 [A, B, C]，新 [A, B]，删除 C
       deleteRemainingChildren(returnFiber, oldFiber);
       return resultingFirstChild;
     }
 
     if (oldFiber === null) {
-      // If we don't have any more existing children we can choose a fast path
-      // since the rest will all be insertions.
+      // 【面试考点】情况2：旧节点遍历完，新增剩余的新节点
+      // 例如：旧 [A, B]，新 [A, B, C, D]，新增 C 和 D
       for (; newIdx < newChildren.length; newIdx++) {
         const newFiber = createChild(returnFiber, newChildren[newIdx], lanes);
         if (newFiber === null) {
@@ -873,11 +926,18 @@ function ChildReconciler(shouldTrackSideEffects) {
       return resultingFirstChild;
     }
 
-    // Add all children to a key map for quick lookups.
+    // 【面试必考】情况3：新旧节点都有剩余 - 第二轮遍历
+    // 这是最复杂的情况，需要处理节点的移动、新增、删除
+
+    // 【面试高频】将剩余的旧节点放入 Map，key 为键
+    // 这样可以在 O(1) 时间内通过 key 查找节点
     const existingChildren = mapRemainingChildren(returnFiber, oldFiber);
 
-    // Keep scanning and use the map to restore deleted items as moves.
+    // 【面试必考】遍历剩余的新节点
+    // 通过 Map 查找可复用的旧节点
     for (; newIdx < newChildren.length; newIdx++) {
+      // 【面试重点】从 Map 中查找可复用的节点
+      // 先按 key 查找，如果没有 key 则按 index 查找
       const newFiber = updateFromMap(
         existingChildren,
         returnFiber,
@@ -888,15 +948,15 @@ function ChildReconciler(shouldTrackSideEffects) {
       if (newFiber !== null) {
         if (shouldTrackSideEffects) {
           if (newFiber.alternate !== null) {
-            // The new fiber is a work in progress, but if there exists a
-            // current, that means that we reused the fiber. We need to delete
-            // it from the child list so that we don't add it to the deletion
-            // list.
+            // 【面试考点】节点被复用，从 Map 中删除
+            // 这样最后 Map 中剩下的就是需要删除的节点
             existingChildren.delete(
               newFiber.key === null ? newIdx : newFiber.key,
             );
           }
         }
+        // 【面试必考】判断节点是否需要移动
+        // 调用 placeChild 判断 oldIndex 和 lastPlacedIndex 的关系
         lastPlacedIndex = placeChild(newFiber, lastPlacedIndex, newIdx);
         if (previousNewFiber === null) {
           resultingFirstChild = newFiber;
@@ -908,8 +968,9 @@ function ChildReconciler(shouldTrackSideEffects) {
     }
 
     if (shouldTrackSideEffects) {
-      // Any existing children that weren't consumed above were deleted. We need
-      // to add them to the deletion list.
+      // 【面试必考】删除 Map 中剩余的旧节点
+      // 这些节点在新列表中找不到对应的，需要删除
+      // 例如：旧 [A, B, C, D]，新 [D, A]，Map 中剩余 [B, C]，删除它们
       existingChildren.forEach(child => deleteChild(returnFiber, child));
     }
 
@@ -1125,6 +1186,13 @@ function ChildReconciler(shouldTrackSideEffects) {
     return created;
   }
 
+  // 【面试必考】reconcileSingleElement - 单节点 Diff
+  // 处理新子节点是单个 ReactElement 的情况
+  //
+  // 面试常问：单节点 Diff 的判断流程是什么？
+  // 答：1. 先比较 key，key 不同则不能复用
+  //     2. key 相同再比较 type，type 不同也不能复用
+  //     3. key 和 type 都相同，则可以复用
   function reconcileSingleElement(
     returnFiber: Fiber,
     currentFirstChild: Fiber | null,
@@ -1133,9 +1201,12 @@ function ChildReconciler(shouldTrackSideEffects) {
   ): Fiber {
     const key = element.key;
     let child = currentFirstChild;
+    // 【面试高频】遍历所有旧子节点，查找可复用的节点
     while (child !== null) {
       // TODO: If key === null and child.key === null, then this only applies to
       // the first item in the list.
+
+      // 【面试必考】第一步：比较 key
       if (child.key === key) {
         switch (child.tag) {
           case Fragment: {
@@ -1179,6 +1250,7 @@ function ChildReconciler(shouldTrackSideEffects) {
           // We intentionally fallthrough here if enableBlocksAPI is not on.
           // eslint-disable-next-lined no-fallthrough
           default: {
+            // 【面试必考】第二步：key 相同，再比较 type
             if (
               child.elementType === element.type ||
               // Keep this check inline so it only runs on the false path:
@@ -1186,7 +1258,11 @@ function ChildReconciler(shouldTrackSideEffects) {
                 ? isCompatibleFamilyForHotReloading(child, element)
                 : false)
             ) {
+              // 【面试高频】key 和 type 都相同，可以复用！
+              // 删除其他兄弟节点（因为新的只有一个子节点）
               deleteRemainingChildren(returnFiber, child.sibling);
+
+              // 【面试重点】复用旧节点，只更新 props
               const existing = useFiber(child, element.props);
               existing.ref = coerceRef(returnFiber, child, element);
               existing.return = returnFiber;
@@ -1199,15 +1275,18 @@ function ChildReconciler(shouldTrackSideEffects) {
             break;
           }
         }
-        // Didn't match.
+        // 【面试考点】key 相同但 type 不同，不能复用
+        // 删除所有旧子节点（包括当前节点和它的兄弟节点）
         deleteRemainingChildren(returnFiber, child);
         break;
       } else {
+        // 【面试考点】key 不同，删除这个旧节点，继续遍历下一个
         deleteChild(returnFiber, child);
       }
       child = child.sibling;
     }
 
+    // 【面试重点】没有找到可复用的节点，创建新节点
     if (element.type === REACT_FRAGMENT_TYPE) {
       const created = createFiberFromFragment(
         element.props.children,

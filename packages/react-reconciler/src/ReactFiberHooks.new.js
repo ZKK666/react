@@ -135,17 +135,44 @@ if (__DEV__) {
   didWarnAboutMismatchedHooksForComponent = new Set();
 }
 
+// 【面试必考】Hook 数据结构
+// 每个 Hook（如 useState、useEffect）都对应一个 Hook 对象
+// 所有 Hook 通过 next 指针串联成链表，存储在 Fiber.memoizedState 上
+//
+// 面试常问：为什么 Hooks 不能在条件语句中使用？
+// 答：因为 Hooks 依赖链表的顺序，条件语句会破坏顺序，导致 Hook 错乱
 export type Hook = {|
+  // 【面试高频】记忆化的状态
+  // - 对于 useState：存储 state 值
+  // - 对于 useEffect：存储 effect 链表
+  // - 对于 useMemo：存储缓存的值
   memoizedState: any,
+
+  // 基础状态 - 用于计算最终状态的初始值
   baseState: any,
+
+  // 基础更新队列 - 跳过的低优先级更新
   baseQueue: Update<any, any> | null,
+
+  // 【面试考点】更新队列 - 存储 setState 产生的更新
+  // 结构：环形链表，pending 指向最后一个更新
   queue: UpdateQueue<any, any> | null,
+
+  // 【面试必考】next - 指向下一个 Hook
+  // 所有 Hook 通过 next 串联成链表
   next: Hook | null,
 |};
 
+// Effect 数据结构 - useEffect/useLayoutEffect 的副作用对象
 export type Effect = {|
+  // 标记 - HookHasEffect | HookPassive | HookLayout 等
   tag: HookFlags,
+
+  // 【面试考点】create - 副作用函数（useEffect 的第一个参数）
+  // 返回值是清理函数
   create: () => (() => void) | void,
+
+  // destroy - 清理函数（create 的返回值）
   destroy: (() => void) | void,
   deps: Array<mixed> | null,
   next: Effect,
@@ -343,15 +370,27 @@ function areHookInputsEqual(
   return true;
 }
 
+// 【面试必考】renderWithHooks - 函数组件渲染的入口函数
+// 这是所有 Hooks 的核心：
+// 1. 设置当前渲染的 Fiber（currentlyRenderingFiber）
+// 2. 根据是首次渲染还是更新，切换不同的 dispatcher
+// 3. 调用函数组件，执行所有 Hooks
+// 4. 返回组件的渲染结果（ReactElement）
+//
+// 面试常问：Hooks 是如何区分首次渲染和更新的？
+// 答：通过切换 dispatcher（mount 和 update 阶段使用不同的 dispatcher）
 export function renderWithHooks<Props, SecondArg>(
-  current: Fiber | null,
-  workInProgress: Fiber,
-  Component: (p: Props, arg: SecondArg) => any,
-  props: Props,
-  secondArg: SecondArg,
-  nextRenderLanes: Lanes,
+  current: Fiber | null,           // 当前屏幕上的 Fiber（首次渲染为 null）
+  workInProgress: Fiber,            // 正在构建的 Fiber
+  Component: (p: Props, arg: SecondArg) => any,  // 函数组件本身
+  props: Props,                     // 组件的 props
+  secondArg: SecondArg,            // 第二个参数（如 Context）
+  nextRenderLanes: Lanes,          // 当前渲染的优先级
 ): any {
   renderLanes = nextRenderLanes;
+
+  // 【面试重点】设置当前正在渲染的 Fiber
+  // 所有 Hooks 通过这个全局变量访问当前 Fiber
   currentlyRenderingFiber = workInProgress;
 
   if (__DEV__) {
@@ -365,7 +404,8 @@ export function renderWithHooks<Props, SecondArg>(
       current !== null && current.type !== workInProgress.type;
   }
 
-  workInProgress.memoizedState = null;
+  // 重置 Fiber 的状态
+  workInProgress.memoizedState = null;  // 清空 Hook 链表
   workInProgress.updateQueue = null;
   workInProgress.lanes = NoLanes;
 
@@ -396,12 +436,21 @@ export function renderWithHooks<Props, SecondArg>(
       ReactCurrentDispatcher.current = HooksDispatcherOnMountInDEV;
     }
   } else {
+    // 【面试必考】Dispatcher 切换逻辑 - 决定使用 mount 还是 update
+    // 判断条件：
+    // 1. current === null：首次渲染（没有上一次的 Fiber）
+    // 2. current.memoizedState === null：虽然不是首次渲染，但没有使用过 Hooks
+    // 如果满足以上任一条件，使用 HooksDispatcherOnMount（首次挂载的 dispatcher）
+    // 否则使用 HooksDispatcherOnUpdate（更新时的 dispatcher）
     ReactCurrentDispatcher.current =
       current === null || current.memoizedState === null
         ? HooksDispatcherOnMount
         : HooksDispatcherOnUpdate;
   }
 
+  // 【面试考点】调用函数组件，执行所有 Hooks
+  // 在这个过程中，组件内的每个 Hook 调用（如 useState、useEffect）
+  // 都会通过 ReactCurrentDispatcher.current 调用对应的实现函数
   let children = Component(props, secondArg);
 
   // Check if there was a render phase update
@@ -541,35 +590,53 @@ export function resetHooksAfterThrow(): void {
   didScheduleRenderPhaseUpdateDuringThisPass = false;
 }
 
+// 【面试必考】mountWorkInProgressHook - 挂载阶段创建新的 Hook 对象
+// 这是所有 Hook（useState、useEffect 等）在首次挂载时调用的函数
+//
+// 面试常问：为什么 Hooks 必须在顶层调用？
+// 答：因为 Hooks 通过链表顺序识别，每次渲染必须保证调用顺序一致
+// 如果在条件语句中，某次渲染可能跳过某个 Hook，导致链表顺序错乱
 function mountWorkInProgressHook(): Hook {
+  // 【面试高频】创建新的 Hook 对象
   const hook: Hook = {
-    memoizedState: null,
+    memoizedState: null,  // 存储 Hook 的状态（state、effect 等）
 
-    baseState: null,
-    baseQueue: null,
-    queue: null,
+    baseState: null,      // 基础状态（用于计算最终状态）
+    baseQueue: null,      // 基础更新队列（跳过的低优先级更新）
+    queue: null,          // 更新队列
 
-    next: null,
+    next: null,           // 指向下一个 Hook（链表结构）
   };
 
   if (workInProgressHook === null) {
-    // This is the first hook in the list
+    // 【面试重点】这是第一个 Hook，挂载到 Fiber.memoizedState
+    // Fiber.memoizedState 指向 Hook 链表的头节点
     currentlyRenderingFiber.memoizedState = workInProgressHook = hook;
   } else {
-    // Append to the end of the list
+    // 【面试重点】追加到链表末尾
+    // 通过 next 指针串联所有 Hook
     workInProgressHook = workInProgressHook.next = hook;
   }
   return workInProgressHook;
 }
 
+// 【面试必考】updateWorkInProgressHook - 更新阶段获取对应的 Hook 对象
+// 这是所有 Hook 在更新时调用的函数，从上次渲染的 Hook 链表中取出对应的 Hook
+//
+// 面试常问：React 如何知道这次的 useState 对应上次的哪个 useState？
+// 答：通过 Hook 链表的顺序，第一次调用对应第一个 Hook，第二次对应第二个，以此类推
+// 这就是为什么不能在条件语句中使用 Hooks - 必须保证每次渲染调用顺序一致
 function updateWorkInProgressHook(): Hook {
   // This function is used both for updates and for re-renders triggered by a
   // render phase update. It assumes there is either a current hook we can
   // clone, or a work-in-progress hook from a previous render pass that we can
   // use as a base. When we reach the end of the base list, we must switch to
   // the dispatcher used for mounts.
+
+  // 【面试重点】从 current 树获取对应的 Hook
   let nextCurrentHook: null | Hook;
   if (currentHook === null) {
+    // 【面试考点】第一个 Hook - 从 current Fiber 的 memoizedState 开始
     const current = currentlyRenderingFiber.alternate;
     if (current !== null) {
       nextCurrentHook = current.memoizedState;
@@ -577,9 +644,11 @@ function updateWorkInProgressHook(): Hook {
       nextCurrentHook = null;
     }
   } else {
+    // 【面试考点】后续 Hook - 沿着链表往下走
     nextCurrentHook = currentHook.next;
   }
 
+  // 【面试重点】检查 workInProgress 树是否已有 Hook
   let nextWorkInProgressHook: null | Hook;
   if (workInProgressHook === null) {
     nextWorkInProgressHook = currentlyRenderingFiber.memoizedState;
@@ -588,13 +657,14 @@ function updateWorkInProgressHook(): Hook {
   }
 
   if (nextWorkInProgressHook !== null) {
-    // There's already a work-in-progress. Reuse it.
+    // 【面试考点】已有 workInProgress Hook - 直接复用
+    // 这种情况发生在 render 阶段的重新渲染（如在渲染过程中调用了 setState）
     workInProgressHook = nextWorkInProgressHook;
     nextWorkInProgressHook = workInProgressHook.next;
 
     currentHook = nextCurrentHook;
   } else {
-    // Clone from the current hook.
+    // 【面试必考】克隆 current Hook 创建新的 workInProgress Hook
 
     invariant(
       nextCurrentHook !== null,
@@ -602,6 +672,8 @@ function updateWorkInProgressHook(): Hook {
     );
     currentHook = nextCurrentHook;
 
+    // 【面试高频】从 current Hook 克隆属性
+    // 保留上次的 state、queue 等信息
     const newHook: Hook = {
       memoizedState: currentHook.memoizedState,
 
@@ -613,10 +685,10 @@ function updateWorkInProgressHook(): Hook {
     };
 
     if (workInProgressHook === null) {
-      // This is the first hook in the list.
+      // 【面试重点】第一个 Hook - 挂载到 Fiber.memoizedState
       currentlyRenderingFiber.memoizedState = workInProgressHook = newHook;
     } else {
-      // Append to the end of the list.
+      // 【面试重点】后续 Hook - 追加到链表末尾
       workInProgressHook = workInProgressHook.next = newHook;
     }
   }
@@ -629,8 +701,16 @@ function createFunctionComponentUpdateQueue(): FunctionComponentUpdateQueue {
   };
 }
 
+// 【面试考点】basicStateReducer - useState 使用的简单 reducer
+// 这是 useState 内部用来计算新 state 的函数
+//
+// 面试常问：setState 支持哪两种形式？
+// 答：1. 直接传值：setState(newValue)  2. 传函数：setState(prev => prev + 1)
 function basicStateReducer<S>(state: S, action: BasicStateAction<S>): S {
   // $FlowFixMe: Flow doesn't like mixed types
+  // 【面试重点】支持两种更新方式
+  // 1. action 是函数：函数式更新，调用 action(state) 计算新值
+  // 2. action 是值：直接使用 action 作为新 state
   return typeof action === 'function' ? action(state) : action;
 }
 
@@ -1123,21 +1203,45 @@ function updateMutableSource<Source, Snapshot>(
   return useMutableSource(hook, source, getSnapshot, subscribe);
 }
 
+// 【面试必考】mountState - useState 首次挂载的实现
+// 这是 useState 在组件首次渲染时的核心逻辑
+//
+// 面试常问：useState 是如何保存状态的？
+// 答：通过 Hook 对象的 memoizedState 属性保存，Hook 对象挂载到 Fiber.memoizedState 链表上
+//
+// 面试常问：setState 是如何触发更新的？
+// 答：通过 dispatchAction 函数，它会创建 update 对象并加入更新队列，然后调度更新
 function mountState<S>(
   initialState: (() => S) | S,
 ): [S, Dispatch<BasicStateAction<S>>] {
+  // 【面试重点】创建并挂载新的 Hook 对象到链表
   const hook = mountWorkInProgressHook();
+
+  // 【面试考点】支持函数式初始化 - 惰性初始化优化
+  // 如果 initialState 是函数，执行它获取初始值
+  // 这样可以避免每次渲染都执行复杂的初始化逻辑
   if (typeof initialState === 'function') {
     // $FlowFixMe: Flow doesn't like mixed types
     initialState = initialState();
   }
+
+  // 【面试高频】保存初始 state
+  // memoizedState：当前的 state 值
+  // baseState：基础 state，用于计算新 state 时的起点
   hook.memoizedState = hook.baseState = initialState;
+
+  // 【面试高频】创建更新队列
+  // 用于存储 setState 产生的所有 update 对象
   const queue = (hook.queue = {
-    pending: null,
-    dispatch: null,
-    lastRenderedReducer: basicStateReducer,
-    lastRenderedState: (initialState: any),
+    pending: null,              // 待处理的 update 环形链表
+    dispatch: null,             // setState 函数引用
+    lastRenderedReducer: basicStateReducer,  // 状态计算函数（reducer）
+    lastRenderedState: (initialState: any),  // 上次渲染的 state
   });
+
+  // 【面试必考】创建 dispatch 函数（即 setState）
+  // 使用 bind 绑定当前 Fiber 和 queue，这样 setState 就能访问到对应的 Fiber
+  // 每次调用 setState 实际上是调用 dispatchAction(currentlyRenderingFiber, queue, action)
   const dispatch: Dispatch<
     BasicStateAction<S>,
   > = (queue.dispatch = (dispatchAction.bind(
@@ -1145,12 +1249,24 @@ function mountState<S>(
     currentlyRenderingFiber,
     queue,
   ): any));
+
+  // 【面试重点】返回 [state, setState] 元组
   return [hook.memoizedState, dispatch];
 }
 
+// 【面试必考】updateState - useState 更新时的实现
+// 这是 useState 在组件更新渲染时的核心逻辑
+//
+// 面试常问：useState 和 useReducer 的关系？
+// 答：useState 本质上是 useReducer 的简化版，内部直接调用 updateReducer
+// basicStateReducer 是最简单的 reducer：(state, action) => typeof action === 'function' ? action(state) : action
 function updateState<S>(
   initialState: (() => S) | S,
 ): [S, Dispatch<BasicStateAction<S>>] {
+  // 【面试重点】复用 updateReducer 的逻辑
+  // basicStateReducer 处理两种情况：
+  // 1. action 是函数：调用 action(prevState) 获取新 state（函数式更新）
+  // 2. action 是值：直接使用 action 作为新 state
   return updateReducer(basicStateReducer, (initialState: any));
 }
 
@@ -1160,29 +1276,42 @@ function rerenderState<S>(
   return rerenderReducer(basicStateReducer, (initialState: any));
 }
 
+// 【面试重点】pushEffect - 将 effect 添加到 Fiber 的 effect 链表
+// useEffect、useLayoutEffect 等都会调用这个函数
+//
+// 面试常问：多个 useEffect 是如何管理的？
+// 答：通过环形链表串联，存储在 Fiber.updateQueue.lastEffect 上
 function pushEffect(tag, create, destroy, deps) {
+  // 【面试考点】创建 effect 对象
   const effect: Effect = {
-    tag,
-    create,
-    destroy,
-    deps,
+    tag,      // effect 的标记（如 HookHasEffect | HookPassive）
+    create,   // effect 函数（useEffect 的第一个参数）
+    destroy,  // 清理函数（effect 函数返回的函数）
+    deps,     // 依赖数组
     // Circular
-    next: (null: any),
+    next: (null: any),  // 指向下一个 effect（环形链表）
   };
+
+  // 【面试高频】获取或创建函数组件的更新队列
   let componentUpdateQueue: null | FunctionComponentUpdateQueue = (currentlyRenderingFiber.updateQueue: any);
   if (componentUpdateQueue === null) {
+    // 首次创建：初始化更新队列，并创建只包含当前 effect 的环形链表
     componentUpdateQueue = createFunctionComponentUpdateQueue();
     currentlyRenderingFiber.updateQueue = (componentUpdateQueue: any);
     componentUpdateQueue.lastEffect = effect.next = effect;
   } else {
+    // 已有更新队列：将新 effect 插入到环形链表中
     const lastEffect = componentUpdateQueue.lastEffect;
     if (lastEffect === null) {
+      // 队列存在但没有 effect，创建环形链表
       componentUpdateQueue.lastEffect = effect.next = effect;
     } else {
+      // 【面试考点】插入到环形链表中
+      // 新 effect 插入到 lastEffect 之后、firstEffect 之前
       const firstEffect = lastEffect.next;
       lastEffect.next = effect;
       effect.next = firstEffect;
-      componentUpdateQueue.lastEffect = effect;
+      componentUpdateQueue.lastEffect = effect;  // 更新 lastEffect 指针
     }
   }
   return effect;
@@ -1203,37 +1332,70 @@ function updateRef<T>(initialValue: T): {|current: T|} {
   return hook.memoizedState;
 }
 
+// 【面试必考】mountEffectImpl - useEffect/useLayoutEffect 首次挂载的实现
+// fiberFlags: Fiber 上的副作用标记（如 Passive、Layout）
+// hookFlags: Hook 上的副作用标记（如 HookPassive、HookLayout）
+// create: effect 函数
+// deps: 依赖数组
+//
+// 面试常问：useEffect 何时执行？
+// 答：在 commit 阶段的 layout 之后异步执行（通过 Passive flag 标记）
 function mountEffectImpl(fiberFlags, hookFlags, create, deps): void {
+  // 【面试重点】创建并挂载新的 Hook 对象
   const hook = mountWorkInProgressHook();
   const nextDeps = deps === undefined ? null : deps;
+
+  // 【面试高频】标记 Fiber 有副作用需要执行
+  // fiberFlags 如 Passive（useEffect）或不加（useLayoutEffect）
   currentlyRenderingFiber.flags |= fiberFlags;
+
+  // 【面试必考】创建 effect 并添加到链表
+  // HookHasEffect 表示这个 effect 需要执行
+  // 首次挂载时，所有 effect 都需要执行，所以带上 HookHasEffect 标记
   hook.memoizedState = pushEffect(
     HookHasEffect | hookFlags,
     create,
-    undefined,
+    undefined,  // 首次挂载没有清理函数
     nextDeps,
   );
 }
 
+// 【面试必考】updateEffectImpl - useEffect/useLayoutEffect 更新时的实现
+// 这是 useEffect 依赖数组优化的核心逻辑
+//
+// 面试常问：useEffect 的依赖数组是如何工作的？
+// 答：通过浅比较（Object.is）依赖数组中的每一项，如果都相等则跳过执行
 function updateEffectImpl(fiberFlags, hookFlags, create, deps): void {
+  // 【面试重点】获取对应的 Hook 对象
   const hook = updateWorkInProgressHook();
   const nextDeps = deps === undefined ? null : deps;
   let destroy = undefined;
 
   if (currentHook !== null) {
+    // 【面试考点】从上次的 effect 中获取信息
     const prevEffect = currentHook.memoizedState;
-    destroy = prevEffect.destroy;
+    destroy = prevEffect.destroy;  // 上次的清理函数
+
     if (nextDeps !== null) {
       const prevDeps = prevEffect.deps;
+
+      // 【面试必考】依赖数组比较 - 优化的关键
+      // 如果依赖没有变化，不添加 HookHasEffect 标记
+      // 这样 commit 阶段就不会执行这个 effect
       if (areHookInputsEqual(nextDeps, prevDeps)) {
+        // 【面试重点】依赖未变化：创建 effect 但不标记 HookHasEffect
+        // 仍然要调用 pushEffect 保持 Hook 链表的顺序
         pushEffect(hookFlags, create, destroy, nextDeps);
         return;
       }
     }
   }
 
+  // 【面试高频】依赖变化：标记 Fiber 有副作用
   currentlyRenderingFiber.flags |= fiberFlags;
 
+  // 【面试必考】依赖变化：创建 effect 并标记 HookHasEffect
+  // HookHasEffect 标记表示这个 effect 需要执行
   hook.memoizedState = pushEffect(
     HookHasEffect | hookFlags,
     create,
@@ -1242,6 +1404,12 @@ function updateEffectImpl(fiberFlags, hookFlags, create, deps): void {
   );
 }
 
+// 【面试必考】mountEffect - useEffect 的公共 API（首次挂载）
+// 这是我们在组件中调用 useEffect 时，首次渲染执行的函数
+//
+// 面试常问：useEffect 和 useLayoutEffect 的区别？
+// 答：useEffect 使用 PassiveEffect 标记，在 commit 的 layout 阶段之后异步执行
+//     useLayoutEffect 使用 UpdateEffect 标记，在 commit 的 layout 阶段同步执行
 function mountEffect(
   create: () => (() => void) | void,
   deps: Array<mixed> | void | null,
@@ -1254,6 +1422,8 @@ function mountEffect(
   }
 
   if (__DEV__ && enableDoubleInvokingEffects) {
+    // 【面试考点】开发环境：添加额外的 MountPassiveDevEffect 标记
+    // 用于开发模式的严格模式（StrictMode）下双重调用 effect
     return mountEffectImpl(
       MountPassiveDevEffect | PassiveEffect | PassiveStaticEffect,
       HookPassive,
@@ -1261,6 +1431,8 @@ function mountEffect(
       deps,
     );
   } else {
+    // 【面试必考】生产环境：PassiveEffect 标记表示异步执行
+    // PassiveStaticEffect 标记表示这个 Fiber 包含 passive effect
     return mountEffectImpl(
       PassiveEffect | PassiveStaticEffect,
       HookPassive,
@@ -1270,6 +1442,11 @@ function mountEffect(
   }
 }
 
+// 【面试必考】updateEffect - useEffect 的公共 API（更新阶段）
+// 这是我们在组件中调用 useEffect 时，更新渲染执行的函数
+//
+// 面试常问：useEffect 的清理函数何时执行？
+// 答：1. 组件卸载时  2. 依赖变化导致 effect 重新执行前（先清理上次的，再执行新的）
 function updateEffect(
   create: () => (() => void) | void,
   deps: Array<mixed> | void | null,
@@ -1280,6 +1457,7 @@ function updateEffect(
       warnIfNotCurrentlyActingEffectsInDEV(currentlyRenderingFiber);
     }
   }
+  // 【面试重点】调用 updateEffectImpl，传入 PassiveEffect 和 HookPassive 标记
   return updateEffectImpl(PassiveEffect, HookPassive, create, deps);
 }
 
