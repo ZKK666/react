@@ -113,43 +113,104 @@ if (__DEV__) {
 
 let debugCounter = 1;
 
+// 【面试必考】Fiber 节点构造函数
+// Fiber 是 React 16+ 的核心数据结构，每个 React 元素对应一个 Fiber 节点
+// Fiber 使 React 能够：
+// 1. 中断渲染工作并在稍后恢复
+// 2. 为不同类型的工作分配优先级
+// 3. 重用之前完成的工作
+// 4. 如果不再需要，可以中止工作
 function FiberNode(
   tag: WorkTag,
   pendingProps: mixed,
   key: null | string,
   mode: TypeOfMode,
 ) {
-  // Instance
+  // ============ Instance 实例相关属性 ============
+  // 【面试高频】节点类型 - 决定如何处理这个节点
+  // 0=函数组件, 1=类组件, 5=div等原生标签, 6=文本节点等
   this.tag = tag;
+
+  // 【面试考点】key - 用于 Diff 算法中判断节点是否可复用
   this.key = key;
+
+  // 元素类型 - 一般和 type 相同，某些情况下会不同
   this.elementType = null;
+
+  // 【面试高频】节点类型 - 函数组件是函数，类组件是类，原生标签是字符串（如'div'）
   this.type = null;
+
+  // 【面试必考】真实节点引用
+  // - 对于原生标签（HostComponent）：指向真实 DOM 节点
+  // - 对于类组件（ClassComponent）：指向组件实例
+  // - 对于函数组件（FunctionComponent）：为 null
   this.stateNode = null;
 
-  // Fiber
+  // ============ Fiber 树结构相关属性 ============
+  // 【面试必考】return - 指向父 Fiber 节点
+  // 为什么叫 return 而不是 parent？因为在 beginWork 返回时，会回到父节点
   this.return = null;
+
+  // 【面试必考】child - 指向第一个子 Fiber 节点
   this.child = null;
+
+  // 【面试必考】sibling - 指向下一个兄弟 Fiber 节点
+  // 三个指针构成了 Fiber 树结构：return（父）、child（子）、sibling（兄弟）
   this.sibling = null;
+
+  // 在兄弟节点中的索引位置
   this.index = 0;
 
+  // ref 引用 - React.createRef() 或 useRef() 创建的引用
   this.ref = null;
 
+  // ============ 状态和属性相关 ============
+  // 新的 props - 本次渲染需要使用的 props
   this.pendingProps = pendingProps;
+
+  // 【面试考点】已记忆的 props - 上一次渲染使用的 props
+  // 用于对比判断是否需要更新
   this.memoizedProps = null;
+
+  // 【面试高频】更新队列 - 存储 setState 等产生的更新
+  // 对于类组件：存储 setState 的更新对象
+  // 对于 HostRoot：存储 ReactDOM.render 的更新
   this.updateQueue = null;
+
+  // 【面试必考】已记忆的 state - 上一次渲染的 state
+  // 对于类组件：是 this.state
+  // 对于函数组件：是 Hook 链表（所有 Hook 通过 memoizedState 串联）
   this.memoizedState = null;
+
+  // 依赖项 - Context 或订阅相关的依赖
   this.dependencies = null;
 
+  // 模式 - ConcurrentMode、StrictMode、ProfileMode 等
   this.mode = mode;
 
-  // Effects
+  // ============ 副作用相关属性 ============
+  // 【面试必考】flags - 标记该节点需要进行的操作
+  // 如 Placement（插入）、Update（更新）、Deletion（删除）等
   this.flags = NoFlags;
+
+  // 子树的 flags - 子孙节点中存在的副作用标记
+  // 用于快速跳过没有副作用的子树
   this.subtreeFlags = NoFlags;
+
+  // 需要删除的子节点列表
   this.deletions = null;
 
+  // ============ 优先级相关属性 ============
+  // 【面试考点】lanes - 当前节点的优先级
+  // React 17 使用 Lane 模型取代了之前的 expirationTime
   this.lanes = NoLanes;
+
+  // 子节点的优先级
   this.childLanes = NoLanes;
 
+  // 【面试必考】alternate - 指向另一棵树中对应的 Fiber 节点
+  // React 使用双缓存技术：current 树（屏幕上显示的）和 workInProgress 树（内存中构建的）
+  // 两棵树通过 alternate 相互引用，完成后交换指针
   this.alternate = null;
 
   if (enableProfilerTimer) {
